@@ -1,12 +1,9 @@
-from tkinter import *
-import subprocess
+import sys
+from subprocess import PIPE, Popen
+import os
 from dpkt import *
 from socket import inet_ntop
-from applications import get_applications
-
-tcpdump = 0
-active = False
-apps = {}
+from PyQt5.QtWidgets import QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QApplication, QMainWindow
 
 
 def mac_addr(address):
@@ -20,70 +17,54 @@ def inet_to_str(inet):
         return inet_ntop(socket.AF_INET6, inet)
 
 
-class GUI(Frame):
-    def __init__(self, master):
-        Frame.__init__(self, master)
-        self.grid()
-        self.create_buttons()
+class GUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
 
-    def create_buttons(self):
-        label = Label(self, text="Press Start/Stop for Network Classification to Work")
-        label.grid()
+        self.tcpdump = None
+        self.active = False
 
-        startButton = Button(self, text="Start", command=start)
-        startButton.grid()
+        self.initUI()
 
-        stopButton = Button(self, text="Stop", command=stop)
-        stopButton.grid()
+    def initUI(self):
+        startButton = QPushButton("Start", self)
+        stopButton = QPushButton("Stop", self)
 
+        startButton.clicked.connect(self.start)
+        stopButton.clicked.connect(self.stop)
 
-def create_gui():
-    root = Tk()
-    root.title("Internet Traffic Classifier")
-    root.geometry("400x200")
+        startButton.move(270, 300)
+        stopButton.move(380, 300)
 
-    app = GUI(root)
+        self.statusBar().showMessage('Press start to start capturing')
 
-    root.mainloop()
+        self.setGeometry(500, 500, 500, 350)
+        self.setWindowTitle('Layer-7 Classification')
+        self.show()
 
+    def start(self):
+        if not self.active:
+            self.active = True
+            self.tcpdump = Popen(['tcpdump', '-i', 'wlp2s0', '-w', 'cap.pcap'], stdout=PIPE)
+            self.statusBar().showMessage('Capturing live packets using tcpdump. Press stop to display results')
 
-# TCPDump -> Capture Packets -> <maths> -> Identify Packets
-# start capturing packets
-def start():
-    global tcpdump, active, apps
-
-    if not active:
-        active = True
-        apps = get_applications()
-        tcpdump = subprocess.Popen(['tcpdump', '-i', 'wlp2s0', '-w', 'cap.pcap'], stdout=subprocess.PIPE)
-
-
-# What % packets (TCP/UDP -etc-) belong to which application over given time?
-# stop capturing packets
-def stop():
-    global tcpdump, active
-
-    if active:
-        active = False
-        tcpdump.terminate()
-        analyse_packets()
+    def stop(self):
+        if self.active:
+            self.active = False
+            if self.tcpdump.poll() is None:
+                self.tcpdump.terminate()
+                self.statusBar().showMessage('Analysing packet capture')
+                # analyse_packets()
+                self.statusBar().showMessage('Press start to start capturing')
 
 
-"""
-[LINK LAYER]                ->
-[ETHERNET LAYER]            -> src, dst, type, data
-[INTERNET PROTOCOL LAYER]   -> src, dst, data, p (protocol)
-
-[TCP]   -> data, sport, dport, ack, seq
-[UDP]   -> data, sport, dport
-"""
+def make_gui():
+    app = QApplication(sys.argv)
+    ex = GUI()
+    sys.exit(app.exec_())
 
 
 def analyse_packets():
-    global apps
-
-    apps = get_applications()
-
     f = open("cap.pcap", 'rb')
     packets = pcap.Reader(f)
     for timestamp, packet in packets:
@@ -98,8 +79,9 @@ def analyse_packets():
             print("TCP")
 
         break
+    os.remove("cap.pcap")
 
 
-if __name__ == "__main__":
-    # create_gui()
-    analyse_packets()
+if __name__ == '__main__':
+    make_gui()
+    # analyse_packets()
