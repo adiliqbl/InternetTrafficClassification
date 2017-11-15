@@ -4,6 +4,9 @@ import os
 from dpkt import *
 from socket import inet_ntop
 from PyQt5.QtWidgets import QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QApplication, QMainWindow
+import xlrd
+
+protocol = {}
 
 
 def mac_addr(address):
@@ -64,6 +67,21 @@ def make_gui():
     sys.exit(app.exec_())
 
 
+def get_protocols():
+    global protocol
+
+    file = xlrd.open_workbook('Protocols.xlsx')
+    sheet = file.sheet_by_index(0)
+
+    for i in range(sheet.nrows):
+        if i == 0:
+            continue
+        if sheet.cell(i, 0).value == '':
+            protocol[int(sheet.cell(i, 1).value)] = sheet.cell(i, 3).value.lower()
+        else:
+            protocol[int(sheet.cell(i, 1).value)] = sheet.cell(i, 0).value
+
+
 def analyse_packets():
     f = open("cap.pcap", 'rb')
     packets = pcap.Reader(f)
@@ -83,5 +101,6 @@ def analyse_packets():
 
 
 if __name__ == '__main__':
-    make_gui()
+    # make_gui()
     # analyse_packets()
+    get_protocols()
