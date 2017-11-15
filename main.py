@@ -1,12 +1,12 @@
-import sys
-from subprocess import PIPE, Popen
 import os
+from subprocess import PIPE, Popen
 from dpkt import *
 from socket import inet_ntop
-from PyQt5.QtWidgets import QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QApplication, QMainWindow
+from PyQt5.QtWidgets import QPushButton, QApplication, QMainWindow
 import xlrd
 
 protocol = {}
+freq = {}
 
 
 def mac_addr(address):
@@ -57,7 +57,8 @@ class GUI(QMainWindow):
             if self.tcpdump.poll() is None:
                 self.tcpdump.terminate()
                 self.statusBar().showMessage('Analysing packet capture')
-                # analyse_packets()
+                analyse_packets("cap.pcap")
+                os.remove("cap.pcap")
                 self.statusBar().showMessage('Press start to start capturing')
 
 
@@ -76,31 +77,88 @@ def get_protocols():
     for i in range(sheet.nrows):
         if i == 0:
             continue
-        if sheet.cell(i, 0).value == '':
-            protocol[int(sheet.cell(i, 1).value)] = sheet.cell(i, 3).value.lower()
+
+        port = sheet.cell(i, 1).value
+        if '-' in str(port):
+            (start, dash, end) = port.partition('-')
+            start = int(start)
+            end = int(end)
+            while start <= end:
+                protocol[start] = sheet.cell(i, 3).value.lower()
+                start += 1
         else:
-            protocol[int(sheet.cell(i, 1).value)] = sheet.cell(i, 0).value
+            port = sheet.cell(i, 1).value
+            if port != '':
+                port = int(port)
+                if sheet.cell(i, 0).value == '':
+                    protocol[port] = sheet.cell(i, 3).value.lower()
+                else:
+                    protocol[port] = sheet.cell(i, 0).value
 
 
-def analyse_packets():
-    f = open("cap.pcap", 'rb')
+def analyse_packets(file):
+    global freq, protocol
+
+    f = open(file, 'rb')
     packets = pcap.Reader(f)
     for timestamp, packet in packets:
         eth = ethernet.Ethernet(packet)
+
+        # ignore if no IP protocol
+        if eth.type != ethernet.ETH_TYPE_IP:
+            continue
+
         iproto = eth.data
 
-        print(mac_addr(eth.src))
-        print(inet_to_str(iproto.src))
-        print(inet_to_str(iproto.dst))
+        # ignore ICMP packets
+        if isinstance(iproto.data, icmp.ICMP) or isinstance(iproto.data, igmp.IGMP):
+            continue
 
-        if type(iproto.data) == tcp.TCP:
-            print("TCP")
+        port = iproto.data.sport
 
-        break
-    os.remove("cap.pcap")
+        if port not in protocol.keys():
+            if 'others' not in freq.keys():
+                freq['others'] = 1
+            else:
+                freq['others'] += 1
+        else:
+            prot = protocol[port]
+            if prot not in freq.keys():
+                freq[prot] = 1
+            else:
+                freq[prot] += 1
+
+
+def plot_graph(npackets):
+    global freq
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    sizes = []
+    for val in freq.values():
+        sizes.append(str(round(((val / npackets) * 100), 2)) + '%')
+    label = list(freq.keys())
+    labels = []
+    z = zip(label, sizes)
+    for tup in z:
+        labels.append(' - '.join(tup))
+
+    # Data to plot
+    cmap = plt.get_cmap('viridis')
+    labels = tuple(labels)
+    sizes = list(freq.values())
+    colors = cmap(np.linspace(0, 1, len(labels)))
+
+    patches, texts = plt.pie(sizes, colors=colors, shadow=True, startangle=90)
+    plt.axis('equal')
+    plt.tight_layout()
+    plt.legend(patches, labels, loc="best")
+    plt.show()
 
 
 if __name__ == '__main__':
-    # make_gui()
-    # analyse_packets()
     get_protocols()
+    # make_gui()
+    analyse_packets("cap.pcap")
+    plot_graph(2740)
