@@ -1,26 +1,17 @@
 import os
+
+import time
 import xlrd
 from subprocess import PIPE, Popen
-from dpkt import *
-from socket import inet_ntop
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QTableWidgetItem, QFrame, \
-    QHBoxLayout, QWidget, QDialog, QLabel, QLineEdit, QTableWidget
+from PyQt5.QtWidgets import QApplication, QPushButton, QTableWidgetItem, QFrame, \
+    QHBoxLayout, QWidget, QDialog, QLabel, QLineEdit, QTableWidget, QHeaderView
 from PyQt5.QtCore import QCoreApplication, QRect, QMetaObject
 import matplotlib.pyplot as plt
 import numpy as np
+from scapy.all import *
+from scapy.layers.inet import UDP, TCP
 
 protocol = {}
-
-
-def mac_addr(address):
-    return ':'.join('%02x' % compat_ord(b) for b in address)
-
-
-def inet_to_str(inet):
-    try:
-        return inet_ntop(socket.AF_INET, inet)
-    except ValueError:
-        return inet_ntop(socket.AF_INET6, inet)
 
 
 class GUI(QDialog):
@@ -42,6 +33,15 @@ class GUI(QDialog):
         self.fileName.setGeometry(QRect(10, 300, 271, 21))
         self.table = QTableWidget(self)
         self.table.setGeometry(QRect(10, 10, 541, 271))
+
+        self.table.insertColumn(0)
+        self.table.insertColumn(1)
+        header_labels = ['Protocol', 'Percentage']
+        self.table.setHorizontalHeaderLabels(header_labels)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
 
         # self.startButton.setStyleSheet("background-color: rgb(5,103,219)")
         # self.stopButton.setStyleSheet("background-color: rgb(20,99,222)")
@@ -74,19 +74,20 @@ class GUI(QDialog):
         if not self.active:
             self.active = True
 
+            # Clearing table
+            for i in reversed(range(self.table.rowCount())):
+                self.table.removeRow(i)
+
             name = str(self.fileName.text())
             if name or len(name) != 0:
                 self.file = True
-
-                # Clearing table
-                for i in reversed(range(self.table.rowCount())):
-                    self.table.removeRow(i)
 
                 self.fileName.setText("")
                 if os.path.exists(name):
                     if name[-5:] == ".pcap":
                         freq, npackets = analyse_packets(name)
                         self.fill_table(freq=freq, npackets=npackets)
+                        # plot_graph(freq=freq, npackets=npackets)
 
                         self.status.setText("Press \'Start\' to start live capturing or enter \'.pcap\' file "
                                             "path for offline analysis")
@@ -94,6 +95,8 @@ class GUI(QDialog):
                         self.status.setText("Not a valid \'.pcap\' file")
                 else:
                     self.status.setText("Not a valid path")
+
+                time.sleep(2)
 
                 self.file = False
                 self.active = False
@@ -105,25 +108,28 @@ class GUI(QDialog):
 
     def stop(self):
         if self.active and not self.file:
+
+            self.startButton.setText("Analysing...")
+            self.status.setText('Analysing packet capture')
+
+            time.sleep(2)
+
             self.active = False
             if self.tcpdump and self.tcpdump.poll() is None:
                 self.tcpdump.terminate()
-            self.startButton.setText("Analysing...")
-            self.status.setText('Analysing packet capture')
-            analyse_packets("cap.pcap")
-            os.remove("cap.pcap")
 
             # Analysing Packets
             freq, npackets = analyse_packets("cap.pcap")
             self.fill_table(freq=freq, npackets=npackets)
+            # plot_graph(freq=freq, npackets=npackets)
 
             self.startButton.setText("Start")
             self.status.setText("Press \'Start\' to start live capturing or enter \'.pcap\' file "
                                 "path for offline analysis")
 
-    def fill_table(self, freq, npackets):
-        print("Filling table")
+            os.remove("cap.pcap")
 
+    def fill_table(self, freq, npackets):
         sizes = []
         for val in freq.values():
             sizes.append(str(round(((val / npackets) * 100), 2)) + '%')
@@ -131,21 +137,11 @@ class GUI(QDialog):
         keys = list(freq.keys())
         rows = [list(a) for a in zip(keys, sizes)]
 
-        # self.table = QTableWidget(len(rows), 2)
-
-        self.table.insertColumn(0)
-        self.table.insertColumn(1)
-
-        header_labels = ['Protocol', 'Percentage']
-        self.table.setHorizontalHeaderLabels(header_labels)
         for row in rows:
             inx = rows.index(row)
             self.table.insertRow(inx)
             self.table.setItem(inx, 0, QTableWidgetItem(str(row[0])))
-            self.table.setItem(inx, 0, QTableWidgetItem(str(row[0])))
-            self.table.setItem(inx, 0, QTableWidgetItem(str(row[0])))
-
-        plot_graph(freq=freq, npackets=npackets)
+            self.table.setItem(inx, 1, QTableWidgetItem(str(row[1])))
 
 
 def make_gui():
@@ -186,37 +182,25 @@ def analyse_packets(file):
     global protocol
 
     freq = {}
-    f = open(file, 'rb')
-    packets = pcap.Reader(f)
     totalPackets = 0
-    for timestamp, packet in packets:
+    packets = rdpcap(file)
+
+    for packet in packets:
         totalPackets += 1
+        if packet.haslayer(UDP) or packet.haslayer(TCP):
+            port = packet.sport
 
-        eth = ethernet.Ethernet(packet)
-
-        # ignore if no IP protocol
-        if eth.type != ethernet.ETH_TYPE_IP:
-            continue
-
-        iproto = eth.data
-
-        # ignore ICMP & IGMP packets
-        if isinstance(iproto.data, icmp.ICMP) or isinstance(iproto.data, igmp.IGMP):
-            continue
-
-        port = iproto.data.sport
-
-        if port not in protocol.keys():
-            if 'others' not in freq.keys():
-                freq['others'] = 1
+            if port not in protocol.keys():
+                if 'others' not in freq.keys():
+                    freq['others'] = 1
+                else:
+                    freq['others'] += 1
             else:
-                freq['others'] += 1
-        else:
-            prot = protocol[port]
-            if prot not in freq.keys():
-                freq[prot] = 1
-            else:
-                freq[prot] += 1
+                prot = protocol[port]
+                if prot not in freq.keys():
+                    freq[prot] = 1
+                else:
+                    freq[prot] += 1
     return freq, totalPackets
 
 
