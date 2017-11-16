@@ -85,10 +85,14 @@ class GUI(QDialog):
                 self.fileName.setText("")
                 if os.path.exists(name):
                     if name[-5:] == ".pcap":
+                        self.startButton.setText("Analysing...")
+                        self.status.setText('Analysing packet capture')
+
                         freq, npackets = analyse_packets(name)
                         self.fill_table(freq=freq, npackets=npackets)
                         # plot_graph(freq=freq, npackets=npackets)
 
+                        self.startButton.setText("Start")
                         self.status.setText("Press \'Start\' to start live capturing or enter \'.pcap\' file "
                                             "path for offline analysis")
                     else:
@@ -100,11 +104,11 @@ class GUI(QDialog):
 
                 self.file = False
                 self.active = False
-            else:
-                self.tcpdump = Popen(['tcpdump', '-i', 'wlp2s0', '-w', 'cap.pcap'], stdout=PIPE)
+        else:
+            self.tcpdump = Popen(['tcpdump', '-i', 'wlp2s0', '-w', 'cap.pcap'], stdout=PIPE)
 
-                self.startButton.setText("Capturing...")
-                self.status.setText('Capturing live packets using tcpdump. Press stop to display results')
+            self.startButton.setText("Capturing...")
+            self.status.setText('Capturing live packets using tcpdump. Press stop to display results')
 
     def stop(self):
         if self.active and not self.file:
@@ -183,24 +187,24 @@ def analyse_packets(file):
 
     freq = {}
     totalPackets = 0
-    packets = rdpcap(file)
 
-    for packet in packets:
-        totalPackets += 1
-        if packet.haslayer(UDP) or packet.haslayer(TCP):
-            port = packet.sport
+    with PcapReader(file) as packets:
+        for packet in packets:
+            totalPackets += 1
+            if packet.haslayer(UDP) or packet.haslayer(TCP):
+                port = packet.sport
 
-            if port not in protocol.keys():
-                if 'others' not in freq.keys():
-                    freq['others'] = 1
+                if port not in protocol.keys():
+                    if 'others' not in freq.keys():
+                        freq['others'] = 1
+                    else:
+                        freq['others'] += 1
                 else:
-                    freq['others'] += 1
-            else:
-                prot = protocol[port]
-                if prot not in freq.keys():
-                    freq[prot] = 1
-                else:
-                    freq[prot] += 1
+                    prot = protocol[port]
+                    if prot not in freq.keys():
+                        freq[prot] = 1
+                    else:
+                        freq[prot] += 1
     return freq, totalPackets
 
 
