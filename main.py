@@ -9,7 +9,9 @@ from PyQt5.QtCore import QCoreApplication, QRect, QMetaObject
 import matplotlib.pyplot as plt
 import numpy as np
 from scapy.all import *
-from scapy.layers.inet import UDP, TCP
+from scapy.layers.inet import UDP, TCP, IP
+from scapy.layers.inet6 import IPv6
+from scapy.layers.sctp import SCTP
 
 protocol = {}
 
@@ -79,6 +81,7 @@ class GUI(QDialog):
                 self.table.removeRow(i)
 
             name = str(self.fileName.text())
+            name = name.strip()
             if name or len(name) != 0:
                 self.file = True
 
@@ -89,8 +92,7 @@ class GUI(QDialog):
                         self.status.setText('Analysing packet capture')
 
                         freq, npackets = analyse_packets(name)
-                        self.fill_table(freq=freq, npackets=npackets)
-                        # plot_graph(freq=freq, npackets=npackets)
+                        self.fill_table(freq, npackets=npackets)
 
                         self.startButton.setText("Start")
                         self.status.setText("Press \'Start\' to start live capturing or enter \'.pcap\' file "
@@ -116,7 +118,7 @@ class GUI(QDialog):
             self.startButton.setText("Analysing...")
             self.status.setText('Analysing packet capture')
 
-            time.sleep(2)
+            time.sleep(4)
 
             self.active = False
             if self.tcpdump and self.tcpdump.poll() is None:
@@ -124,8 +126,7 @@ class GUI(QDialog):
 
             # Analysing Packets
             freq, npackets = analyse_packets("cap.pcap")
-            self.fill_table(freq=freq, npackets=npackets)
-            # plot_graph(freq=freq, npackets=npackets)
+            self.fill_table(freq, npackets=npackets)
 
             self.startButton.setText("Start")
             self.status.setText("Press \'Start\' to start live capturing or enter \'.pcap\' file "
@@ -133,12 +134,17 @@ class GUI(QDialog):
 
             os.remove("cap.pcap")
 
-    def fill_table(self, freq, npackets):
+    def fill_table(self, freq_, npackets):
+
+        # plot_graph(freq=freq, npackets=npackets)
+
+        freq = sorted(freq_.items(), key=lambda x: x[1])
+
         sizes = []
-        for val in freq.values():
+        for key, val in freq:
             sizes.append(str(round(((val / npackets) * 100), 2)) + '%')
 
-        keys = list(freq.keys())
+        keys = list(i[0] for i in freq)
         rows = [list(a) for a in zip(keys, sizes)]
 
         for row in rows:
@@ -188,23 +194,33 @@ def analyse_packets(file):
     freq = {}
     totalPackets = 0
 
+    def add(prot):
+        if prot not in freq.keys():
+            freq[prot] = 1
+        else:
+            freq[prot] += 1
+
     with PcapReader(file) as packets:
         for packet in packets:
             totalPackets += 1
-            if packet.haslayer(UDP) or packet.haslayer(TCP):
-                port = packet.sport
+            check = True  # True -> if IP is not included and packet belongs to 'others'
 
-                if port not in protocol.keys():
-                    if 'others' not in freq.keys():
-                        freq['others'] = 1
-                    else:
-                        freq['others'] += 1
-                else:
-                    prot = protocol[port]
-                    if prot not in freq.keys():
-                        freq[prot] = 1
-                    else:
-                        freq[prot] += 1
+            if (IP in packet or IPv6 in packet) and (
+                                SCTP in packet or UDP in packet or TCP in packet):
+
+                # If same type of packets i.e. UDP are flowing. Then most probably they have same
+                # port being used i.e. smaller port. As in majority of captures, smaller ports define
+                # the protocol of the packet, being transferred to or towards that port, more accurately
+                # than larger port. As larger port is observed more on server side.
+                # thus port through which packet is sent and is received on client side are usually smaller
+
+                port = min(packet.sport, packet.dport)
+                if port in protocol.keys():
+                    add(protocol[port])
+                    check = False
+
+            if check:
+                add('others')
     return freq, totalPackets
 
 
